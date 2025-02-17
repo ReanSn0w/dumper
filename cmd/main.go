@@ -63,6 +63,7 @@ func handler(log lgr.L, url *url.URL) http.Handler {
 			Director: func(req *http.Request) {
 				req.URL.Scheme = url.Scheme
 				req.URL.Host = url.Host
+				req.URL.User = url.User
 				req.URL.Path = r.URL.Path
 				req.URL.RawQuery = r.URL.RawQuery
 			},
@@ -82,15 +83,15 @@ func handler(log lgr.L, url *url.URL) http.Handler {
 func makePrint(req, resp []byte, reqErr, respErr error) string {
 	buffer := new(bytes.Buffer)
 
-	buffer.WriteString("----------")
+	buffer.WriteString("----------\n")
 	buffer.WriteString("Request: \n\n")
-	if reqErr != nil {
+	if reqErr == nil {
 		buffer.Write(req)
 	} else {
 		buffer.WriteString(fmt.Sprintf("Error: %v", reqErr))
 	}
 	buffer.WriteString("\n\nResponse:\n\n")
-	if respErr != nil {
+	if respErr == nil {
 		buffer.Write(resp)
 	} else {
 		buffer.WriteString(fmt.Sprintf("Error: %v", respErr))
