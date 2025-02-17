@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -19,9 +20,9 @@ var (
 		app.Debug
 
 		Port     int    `long:"port" env:"PORT" default:"8080" description:"Port to listen on"`
-		Disabled bool   `long:"enabled" env:"ENABLED" description:"Disable logging mode"`
-		Target   string `long:"target" env:"TARGET" description:"Target host for logging"`
-		Body     bool   `long:"debug-body" env:"DEBUG_BODY" description:"Debug body"`
+		Disabled bool   `long:"enabled" env:"ENABLED" description:"Disable logging mode (service will work as a proxy)"`
+		Target   string `long:"target" env:"TARGET" description:"target host"`
+		Body     bool   `long:"print-body" env:"PRINT_BODY" description:"print body"`
 	}{}
 )
 
@@ -41,7 +42,7 @@ func main() {
 	app.GracefulShutdown(time.Second * 3)
 }
 
-func handler(log lgr.L, url *url.URL) http.Handler {
+func handler(log lgr.L, pass *url.URL) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var (
 			dumpRequest     []byte
@@ -57,26 +58,29 @@ func handler(log lgr.L, url *url.URL) http.Handler {
 			}
 		}()
 
+		r.URL.Host = pass.Host
+		r.URL.Scheme = pass.Scheme
+		r.Host = pass.Host
+		r.RequestURI = ""
+
 		dumpRequest, dumpRequestErr = httputil.DumpRequest(r, opts.Body)
 
-		proxy := httputil.ReverseProxy{
-			Director: func(req *http.Request) {
-				req.URL.Scheme = url.Scheme
-				req.URL.Host = url.Host
-				req.URL.User = url.User
-				req.URL.Path = r.URL.Path
-				req.URL.RawQuery = r.URL.RawQuery
-			},
-			ModifyResponse: func(r *http.Response) error {
-				dumpResponse, dumpResponseErr = httputil.DumpResponse(r, opts.Body)
-				return nil
-			},
-			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-				web.NewResponse(err).Write(http.StatusInternalServerError, w)
-			},
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			web.NewResponse(err).Write(http.StatusInternalServerError, w)
+			return
 		}
 
-		proxy.ServeHTTP(w, r)
+		dumpResponse, dumpResponseErr = httputil.DumpResponse(resp, opts.Body)
+
+		w.WriteHeader(resp.StatusCode)
+		for key, vals := range resp.Header {
+			for _, val := range vals {
+				w.Header().Add(key, val)
+			}
+		}
+
+		io.Copy(w, resp.Body)
 	})
 }
 
@@ -90,13 +94,16 @@ func makePrint(req, resp []byte, reqErr, respErr error) string {
 	} else {
 		buffer.WriteString(fmt.Sprintf("Error: %v", reqErr))
 	}
-	buffer.WriteString("\n\nResponse:\n\n")
-	if respErr == nil {
-		buffer.Write(resp)
-	} else {
-		buffer.WriteString(fmt.Sprintf("Error: %v", respErr))
-	}
-	buffer.WriteString("\n\n")
 
+	if len(resp) != 0 || respErr != nil {
+		buffer.WriteString("\n\nResponse:\n\n")
+		if respErr == nil {
+			buffer.Write(resp)
+		} else {
+			buffer.WriteString(fmt.Sprintf("Error: %v", respErr))
+		}
+	}
+
+	buffer.WriteString("\n\n")
 	return buffer.String()
 }
